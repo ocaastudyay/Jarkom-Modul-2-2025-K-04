@@ -4,3 +4,5 @@ Anggota :
 | Nama | NRP |
 | -------------------- | ---------- |
 | Diva Aulia Rosa | 5027241003 |
+
+maaf belum sempat bikin lapres, sekalian setelah demo dan revisi aja, mohon dimaklumi karena partnernya ngilang :((
