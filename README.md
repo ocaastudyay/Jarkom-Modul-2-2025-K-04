@@ -350,3 +350,11 @@ Ketika Setup Slave DNS Server (Valmar - 192.213.3.4) berhasil dilakukan
 
 Ketika Setup Client Host (Resolver) berhasil
 <img width="998" height="660" alt="Screenshot 2025-10-22 203800" src="https://github.com/user-attachments/assets/08675ce2-ee6e-4c2b-8ac7-469eb7c1270a" />
+
+Untuk memastikan semuanya berjalan dengan lancar coba cek dengan beberapa bash di bawah ini pada valmar
+```bash
+/etc/init.d/bind9 status
+ls -l /var/cache/bind/k16.com.zone
+dig k16.com @127.0.0.1
+```
+<img width="1267" height="857" alt="Screenshot 2025-10-22 212423" src="https://github.com/user-attachments/assets/b08e6ec2-6bb2-4520-992d-70b1fcc87911" />
