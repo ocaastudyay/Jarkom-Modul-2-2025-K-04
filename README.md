@@ -67,8 +67,9 @@ Gunakan script bash dan coba gunakan tampilan yang interakttif agar lebih mudah
 #!/bin/bash
 
 # =================================================================
-# Script Otomatisasi Setup DNS Master, Slave, dan Client
+# Script Otomatisasi Setup DNS Master, Slave, dan Client (FINAL PRODUCTION READY)
 # DOMAIN: k16.com
+# FIX: Mengatasi masalah Non-Systemd, service restart, named.conf, dan syntax error.
 # =================================================================
 
 # --- Variabel Warna ANSI ---
@@ -76,52 +77,66 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m' 
 
-# --- Variabel Konfigurasi (Menggunakan IP 192.213.3.x sesuai skrip terakhir) ---
+# --- Variabel Konfigurasi ---
 DOMAIN="k16.com"
-MASTER_IP="192.213.3.3"   # IP Tirion (ns1)
-SLAVE_IP="192.213.3.4"    # IP Valmar (ns2)
-WEB_IP="192.213.3.2"      # IP Sirion (website)
+MASTER_IP="192.213.3.3"
+SLAVE_IP="192.213.3.4"
+WEB_IP="192.213.3.2"
 FORWARDER_IP="192.168.122.1"
+ZONE_DIR="/etc/bind" 
 
 # --- Fungsi Utility ---
 
-# Pengecekan hak akses root
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        echo -e "${RED}❌ GAGAL: Script ini harus dijalankan sebagai root (atau menggunakan sudo).${NC}"
+        echo -e "${RED}❌ GAGAL: Script ini harus dijalankan sebagai root.${NC}"
         exit 1
     fi
 }
 
-# Fungsi restart bind9 (lebih robust)
+# Fungsi restart bind9 dengan FALLBACK MANUAL yang terkuat
 restart_bind9() {
     echo -n "  -> Me-restart service BIND9..."
-    # Sistem yang tidak memiliki systemctl akan menggunakan 'service' atau '/etc/init.d/'
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl restart bind9
-    elif command -v service >/dev/null 2>&1; then
-        service bind9 restart
-    elif [ -x /etc/init.d/bind9 ]; then
-        /etc/init.d/bind9 restart
-    else
-        echo -e "\n${RED}❌ GAGAL: Tidak dapat me-restart bind9: perintah service/init.d/systemctl tidak tersedia.${NC}"
-        exit 1
+    
+    local status=1
+    
+    # 1. Pastikan tidak ada proses named lama yang mengganggu
+    killall named 2>/dev/null 
+    sleep 1 
+
+    # 2. Coba jalankan named secara manual (fallback untuk non-systemd/non-init.d)
+    # Menggunakan named.conf sebagai entry point utama
+    /usr/sbin/named -c /etc/bind/named.conf & 2>/dev/null
+    sleep 2 
+    status=$? 
+
+    # 3. Final Check: Pastikan Port 53 digunakan
+    if [ $status -eq 0 ]; then
+        if netstat -tuln | grep -q ':53'; then
+            echo -e "${GREEN}BERHASIL!${NC}"
+            return 0
+        else
+            status=1
+        fi
     fi
-    if [ $? -eq 0 ]; then
+
+    # Hasil Akhir
+    if [ $status -eq 0 ]; then
         echo -e "${GREEN}BERHASIL!${NC}"
     else
         echo -e "${RED}GAGAL!${NC}"
+        echo -e "${YELLOW}💡 INFO: BIND gagal memulai. Cek konflik Port 53: ${BLUE}netstat -tuln | grep ':53'${NC}${NC}"
+        exit 1
     fi
 }
 
-# Fungsi Install BIND9
 install_bind9() {
-    echo -n "  -> Mengupdate list paket dan menginstall BIND9..."
-    # Menambahkan 'telnet' di instalasi agar pengecekan di luar script lebih mudah
+    echo -n "  -> Mengupdate list paket dan menginstall BIND9 & dnsutils..."
     apt-get update > /dev/null 2>&1
-    apt-get install -y bind9 dnsutils telnet > /dev/null 2>&1
+    # Memastikan net-tools terinstal untuk netstat
+    apt-get install -y bind9 dnsutils net-tools telnet > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}BERHASIL!${NC}"
     else
@@ -133,9 +148,8 @@ install_bind9() {
 # --- Main Program ---
 check_root
 
-# Tampilan menu utama
 echo -e "${BLUE}====================================================${NC}"
-echo -e "${YELLOW}       🚀 Setup Otomatisasi DNS - Domain $DOMAIN${NC}"
+echo -e "${YELLOW}        🚀 Setup Otomatisasi DNS - Domain $DOMAIN (FINAL)${NC}"
 echo -e "${BLUE}====================================================${NC}"
 echo -e "Pilih peran mesin ini:"
 echo -e "  ${GREEN}1) Setup Master DNS Server (Tirion - $MASTER_IP)${NC}"
@@ -144,7 +158,6 @@ echo -e "  ${GREEN}3) Setup Client Host (Resolver)${NC}"
 echo -e "----------------------------------------------------"
 read -p "Masukkan pilihan (1, 2, atau 3): " opsi
 
-# Validasi Pilihan
 if ! [[ "$opsi" =~ ^[1-3]$ ]]; then
     echo -e "${RED}❌ ERROR: Pilihan tidak valid. Harap masukkan 1, 2, atau 3.${NC}"
     exit 1
@@ -152,22 +165,17 @@ fi
 
 case $opsi in
     1)
-        # -----------------------------------------------------------------
         # Opsi 1: Setup untuk Master DNS (Tirion)
-        # -----------------------------------------------------------------
-        echo -e "\n${BLUE}<<< [1/5] Setup Master DNS Server (Tirion) >>>${NC}"
-
-        # Langkah 1: Instalasi
+        echo -e "\n${BLUE}<<< [1/7] Setup Master DNS Server (Tirion) >>>${NC}"
         install_bind9
 
-        # Langkah 2: Konfigurasi named.conf.options
+        # Langkah 2: Konfigurasi named.conf.options 
         echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.options${NC}"
-        echo -n "  -> Mengatur forwarder dan allow-transfer..."
+        echo -n "  -> Mengatur forwarder ($FORWARDER_IP)..."
         cat <<EOF > /etc/bind/named.conf.options
 options {
     directory "/var/cache/bind";
-    listen-on { any; };
-    listen-on-v6 { any; };
+    listen-on-v6 { none; };
     forwarders {
         $FORWARDER_IP;
     };
@@ -175,108 +183,118 @@ options {
     recursion yes;
 };
 EOF
-        echo -e "${GREEN}BERHASIL! (Forwarder: $FORWARDER_IP)${NC}"
+        echo -e "${GREEN}BERHASIL!${NC}"
 
-        # Langkah 3: Mendaftarkan zona master di named.conf.local
-        echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf.local${NC}"
-        echo -n "  -> Mendaftarkan zona master $DOMAIN..."
-        # MENGGUNAKAN KONFIGURASI MASTER YANG BENAR
+        # Langkah 3: Konfigurasi named.conf (File Utama)
+        echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf (File Utama) [FIXED]${NC}"
+        echo -n "  -> Membuat entry point named.conf tanpa default-zones..."
+        cat <<EOF > /etc/bind/named.conf
+include "/etc/bind/named.conf.options";
+include "/etc/bind/named.conf.local";
+EOF
+        echo -e "${GREEN}BERHASIL!${NC}"
+        
+        # Langkah 4: Mendaftarkan zona master di named.conf.local
+        echo -e "\n${YELLOW}* Langkah 4: Konfigurasi named.conf.local${NC}"
+        echo -n "  -> Mendaftarkan zona otoritatif master $DOMAIN..."
         cat <<EOF > /etc/bind/named.conf.local
-// Konfigurasi Zona Master $DOMAIN
+// Konfigurasi Zona Master Otoritatif $DOMAIN
 zone "$DOMAIN" {
     type master;
-    file "/etc/bind/k16/$DOMAIN";
+    file "$ZONE_DIR/$DOMAIN.zone";
     notify yes;
-    allow-transfer { $SLAVE_IP; }; // Izinkan transfer ke Valmar
+    allow-transfer { $SLAVE_IP; };
 };
 EOF
-        echo -e "${GREEN}BERHASIL! (Slave IP diizinkan: $SLAVE_IP)${NC}"
+        echo -e "${GREEN}BERHASIL!${NC}"
 
-        # Langkah 4: Membuat file zona
-        echo -e "\n${YELLOW}* Langkah 4: Membuat File Zona ($DOMAIN)${NC}"
-        mkdir -p /etc/bind/k16
-        echo -n "  -> Membuat entri A record (ns1, ns2, @)..."
-        # MENINGKATKAN NOMOR SERIAL UNTUK MEMASTIKAN TRANSFER
-        cat <<EOF > /etc/bind/k16/$DOMAIN
+        # Langkah 5: Membuat file zona
+        echo -e "\n${YELLOW}* Langkah 5: Membuat File Zona ($DOMAIN) dan Izin${NC}"
+        echo -n "  -> Membuat entri SOA, NS, dan A record..."
+
+        cat <<EOF > $ZONE_DIR/$DOMAIN.zone
 \$TTL    604800
 @       IN      SOA     ns1.$DOMAIN. root.$DOMAIN. (
-                        2025102202 ; Serial (Dinaikkan untuk memastikan Slave menarik data)
+                        2025102310 ; Serial (Dinaikkan)
                         604800     ; Refresh
                         86400      ; Retry
                         2419200    ; Expire
                         604800 )   ; Negative Cache TTL
 
-; Name Servers
+; Name Servers (NS)
 @       IN      NS      ns1.$DOMAIN.
 @       IN      NS      ns2.$DOMAIN.
 
 ; A Records
-@       IN      A       $WEB_IP     ; Apex domain (@) menunjuk ke Sirion
-ns1     IN      A       $MASTER_IP  ; ns1 menunjuk ke Tirion
-ns2     IN      A       $SLAVE_IP   ; ns2 menunjuk ke Valmar
+@       IN      A       $WEB_IP     
+ns1     IN      A       $MASTER_IP 
+ns2     IN      A       $SLAVE_IP 
 www     IN      A       $WEB_IP
 EOF
-        echo -e "${GREEN}BERHASIL! (Web IP: $WEB_IP)${NC}"
-        
-        # Langkah 5: Verifikasi dan Restart
-        echo -e "\n${YELLOW}* Langkah 5: Verifikasi dan Restart Service${NC}"
-        echo -n "  -> Memeriksa file konfigurasi..."
-        named-checkconf 2>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}named.conf OK!${NC}"
-        else
-            echo -e "${RED}named-checkconf GAGAL!${NC}"
-            exit 1
-        fi
+        chown root:bind $ZONE_DIR/$DOMAIN.zone
+        chmod 644 $ZONE_DIR/$DOMAIN.zone
+        echo -e "${GREEN}FILE ZONA BERHASIL!${NC}"
+
+        # Langkah 6: Verifikasi Konfigurasi
+        echo -e "\n${YELLOW}* Langkah 6: Verifikasi Konfigurasi${NC}"
+        echo -n "  -> Memeriksa named.conf..."
+        named-checkconf /etc/bind/named.conf
+        if [ $? -ne 0 ]; then echo -e "${RED}named-checkconf GAGAL!${NC}"; exit 1; else echo -e "${GREEN}named.conf OK!${NC}"; fi
         
         echo -n "  -> Memeriksa zona file..."
-        named-checkzone $DOMAIN /etc/bind/k16/$DOMAIN 2>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}Zone file OK!${NC}"
-        else
-            echo -e "${RED}named-checkzone GAGAL!${NC}"
-            exit 1
-        fi
+        named-checkzone $DOMAIN $ZONE_DIR/$DOMAIN.zone
+        if [ $? -ne 0 ]; then echo -e "${RED}named-checkzone GAGAL!${NC}"; exit 1; else echo -e "${GREEN}Zone file OK!${NC}"; fi
         
-        restart_bind9
+        # Langkah 7: Restart Service (FALLBACK)
+        echo -e "\n${YELLOW}* Langkah 7: Restart Service (FALLBACK MANUAL)...${NC}"
+        restart_bind9 
         
         echo -e "\n${GREEN}====================================================${NC}"
-        echo -e "${GREEN}✅ Setup Master DNS Server (Tirion) SELESAI.${NC}"
-        echo -e "${GREEN}  Tirion sudah siap menerima Zone Transfer dari Slave.${NC}"
+        # FIX KRITIS: echo-e di baris ini sudah diperbaiki
+        echo -e "${GREEN}✅ Setup Master DNS Server (Tirion) SELESAI.${NC}" 
         echo -e "${GREEN}====================================================${NC}"
         ;;
 
     2)
-        # -----------------------------------------------------------------
         # Opsi 2: Setup untuk Slave DNS (Valmar)
-        # -----------------------------------------------------------------
-        echo -e "\n${BLUE}<<< [2/4] Setup Slave DNS Server (Valmar) >>>${NC}"
-
-        # Langkah 1: Instalasi
+        echo -e "\n${BLUE}<<< [2/3] Setup Slave DNS Server (Valmar) >>>${NC}"
         install_bind9
         
-        # Langkah 2: Mendaftarkan zona slave di named.conf.local
-        echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.local${NC}"
+        # Langkah 2: Konfigurasi named.conf.local
+        echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.local [FIXED]${NC}"
         echo -n "  -> Mendaftarkan zona slave $DOMAIN..."
+        
+        # named.conf di Slave (tanpa default-zones)
+        cat <<EOF > /etc/bind/named.conf
+include "/etc/bind/named.conf.options";
+include "/etc/bind/named.conf.local";
+EOF
+
+        cat <<EOF > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+    listen-on-v6 { none; }; 
+    allow-query { any; };
+    recursion yes;
+};
+EOF
+
         cat <<EOF > /etc/bind/named.conf.local
 // Konfigurasi Zona Slave $DOMAIN
 zone "$DOMAIN" {
     type slave;
-    file "/var/cache/bind/$DOMAIN.zone"; // Lokasi default cache di Debian/Ubuntu
-    masters { $MASTER_IP; }; // Menarik data dari Tirion
+    file "/var/cache/bind/$DOMAIN.zone";
+    masters { $MASTER_IP; };
 };
 EOF
         echo -e "${GREEN}BERHASIL! (Master IP: $MASTER_IP)${NC}"
 
-        # Langkah 3: Restart Service
+        # Langkah 3: Restart Service dan Verifikasi
         echo -e "\n${YELLOW}* Langkah 3: Restart Service${NC}"
-        restart_bind9
+        restart_bind9 
         
-        # Langkah 4: Verifikasi
-        echo -e "\n${YELLOW}* Langkah 4: Verifikasi Zone Transfer${NC}"
-        echo -e "💡 INFO: Periksa file zona di /var/cache/bind/ untuk membuktikan transfer berhasil!${NC}"
-        echo -e "   ${BLUE}ls -l /var/cache/bind/$DOMAIN.zone${NC}"
-        echo -e "   ${BLUE}grep 'Transfer completed' /var/log/syslog${NC} (Jika syslogd berjalan)"
+        echo -e "\n${YELLOW}* Verifikasi Zone Transfer${NC}"
+        echo -e "💡 INFO: Valmar akan menarik zona dari Tirion. Gunakan ${BLUE}dig k16.com @127.0.0.1${NC} untuk memverifikasi."
 
         echo -e "\n${GREEN}====================================================${NC}"
         echo -e "${GREEN}✅ Setup Slave DNS Server (Valmar) SELESAI.${NC}"
@@ -284,47 +302,34 @@ EOF
         ;;
 
     3)
-        # -----------------------------------------------------------------
         # Opsi 3: Setup untuk Client (Resolver)
-        # -----------------------------------------------------------------
         echo -e "\n${BLUE}<<< [3/3] Setup Client Host (Resolver) >>>${NC}"
         
         # Langkah 1: Konfigurasi /etc/resolv.conf
         echo -e "\n${YELLOW}* Langkah 1: Mengkonfigurasi /etc/resolv.conf${NC}"
-        echo -n "  -> Menulis nameserver..."
+        echo -n "  -> Menulis nameserver (ns1 -> ns2 -> Forwarder)..."
+        
         cat <<EOF > /etc/resolv.conf
 nameserver $MASTER_IP
 nameserver $SLAVE_IP
 nameserver $FORWARDER_IP
+search $DOMAIN
 EOF
         echo -e "${GREEN}BERHASIL!${NC}"
         
-        echo -e "\n${YELLOW}* Status Resolver:${NC}"
-        echo -e "  1. Tirion (Master): ${GREEN}$MASTER_IP${NC}"
-        echo -e "  2. Valmar (Slave): ${GREEN}$SLAVE_IP${NC}"
-        echo -e "  3. Fallback: ${GREEN}$FORWARDER_IP${NC}"
-
         # Langkah 2: Instalasi DNS Utility
         echo -e "\n${YELLOW}* Langkah 2: Instalasi DNS Utility${NC}"
-        echo -n "  -> Menginstall dnsutils dan telnet..."
+        echo -n "  -> Menginstall dnsutils, telnet, dan net-tools..."
         apt-get update > /dev/null 2>&1
-        apt-get install -y dnsutils telnet > /dev/null 2>&1
+        apt-get install -y dnsutils net-tools telnet > /dev/null 2>&1
         if [ $? -eq 0 ]; then
              echo -e "${GREEN}BERHASIL!${NC}"
         else
              echo -e "${YELLOW}WARNING: Utility gagal diinstall. Lanjut...${NC}"
         fi
         
-        # Membersihkan file .bashrc dari entri resolv.conf yang tidak perlu
-        echo -e "\n${YELLOW}* Pembersihan konfigurasi .bashrc lama...${NC}"
-        sed -i '/nameserver 192\.213\.3\.3/d' /root/.bashrc
-        sed -i '/nameserver 192\.213\.3\.4/d' /root/.bashrc
-        sed -i '/nameserver 192\.168\.122\.1/d' /root/.bashrc
-        echo -e "${GREEN}BERHASIL!${NC}"
-
         echo -e "\n${GREEN}====================================================${NC}"
         echo -e "${GREEN}✅ Setup Client Host SELESAI.${NC}"
-        echo -e "${GREEN}Anda dapat menguji dengan 'dig $DOMAIN @$MASTER_IP'${NC}"
         echo -e "${GREEN}====================================================${NC}"
         ;;
 esac
