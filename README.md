@@ -77,7 +77,7 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# --- Variabel Konfigurasi (sesuai soal) ---
+# --- Variabel Konfigurasi (Menggunakan IP 192.213.3.x sesuai skrip terakhir) ---
 DOMAIN="k16.com"
 MASTER_IP="192.213.3.3"   # IP Tirion (ns1)
 SLAVE_IP="192.213.3.4"    # IP Valmar (ns2)
@@ -97,6 +97,7 @@ check_root() {
 # Fungsi restart bind9 (lebih robust)
 restart_bind9() {
     echo -n "  -> Me-restart service BIND9..."
+    # Sistem yang tidak memiliki systemctl akan menggunakan 'service' atau '/etc/init.d/'
     if command -v systemctl >/dev/null 2>&1; then
         systemctl restart bind9
     elif command -v service >/dev/null 2>&1; then
@@ -117,8 +118,9 @@ restart_bind9() {
 # Fungsi Install BIND9
 install_bind9() {
     echo -n "  -> Mengupdate list paket dan menginstall BIND9..."
+    # Menambahkan 'telnet' di instalasi agar pengecekan di luar script lebih mudah
     apt-get update > /dev/null 2>&1
-    apt-get install -y bind9 dnsutils > /dev/null 2>&1
+    apt-get install -y bind9 dnsutils telnet > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}BERHASIL!${NC}"
     else
@@ -152,7 +154,7 @@ case $opsi in
         # -----------------------------------------------------------------
         # Opsi 1: Setup untuk Master DNS (Tirion)
         # -----------------------------------------------------------------
-        echo -e "\n${BLUE}<<< [1/3] Setup Master DNS Server (Tirion) >>>${NC}"
+        echo -e "\n${BLUE}<<< [1/5] Setup Master DNS Server (Tirion) >>>${NC}"
 
         # Langkah 1: Instalasi
         install_bind9
@@ -177,6 +179,7 @@ EOF
         # Langkah 3: Mendaftarkan zona master di named.conf.local
         echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf.local${NC}"
         echo -n "  -> Mendaftarkan zona master $DOMAIN..."
+        # MENGGUNAKAN KONFIGURASI MASTER YANG BENAR
         cat <<EOF > /etc/bind/named.conf.local
 // Konfigurasi Zona Master $DOMAIN
 zone "$DOMAIN" {
@@ -186,16 +189,17 @@ zone "$DOMAIN" {
     allow-transfer { $SLAVE_IP; }; // Izinkan transfer ke Valmar
 };
 EOF
-        echo -e "${GREEN}BERHASIL! (Slave IP: $SLAVE_IP)${NC}"
+        echo -e "${GREEN}BERHASIL! (Slave IP diizinkan: $SLAVE_IP)${NC}"
 
         # Langkah 4: Membuat file zona
         echo -e "\n${YELLOW}* Langkah 4: Membuat File Zona ($DOMAIN)${NC}"
         mkdir -p /etc/bind/k16
         echo -n "  -> Membuat entri A record (ns1, ns2, @)..."
+        # MENINGKATKAN NOMOR SERIAL UNTUK MEMASTIKAN TRANSFER
         cat <<EOF > /etc/bind/k16/$DOMAIN
 \$TTL    604800
 @       IN      SOA     ns1.$DOMAIN. root.$DOMAIN. (
-                        2025102201 ; Serial (YYYYMMDDNN)
+                        2025102202 ; Serial (Dinaikkan untuk memastikan Slave menarik data)
                         604800     ; Refresh
                         86400      ; Retry
                         2419200    ; Expire
@@ -237,6 +241,7 @@ EOF
         
         echo -e "\n${GREEN}====================================================${NC}"
         echo -e "${GREEN}✅ Setup Master DNS Server (Tirion) SELESAI.${NC}"
+        echo -e "${GREEN}  Tirion sudah siap menerima Zone Transfer dari Slave.${NC}"
         echo -e "${GREEN}====================================================${NC}"
         ;;
 
@@ -244,20 +249,13 @@ EOF
         # -----------------------------------------------------------------
         # Opsi 2: Setup untuk Slave DNS (Valmar)
         # -----------------------------------------------------------------
-        echo -e "\n${BLUE}<<< [2/3] Setup Slave DNS Server (Valmar) >>>${NC}"
+        echo -e "\n${BLUE}<<< [2/4] Setup Slave DNS Server (Valmar) >>>${NC}"
 
         # Langkah 1: Instalasi
         install_bind9
         
-        # Langkah 2: Buat symlink jika diperlukan (agar fungsi restart_bind9 berjalan)
-        if [ ! -e /etc/init.d/bind9 ] && [ -x /etc/init.d/named ]; then
-             echo -n "  -> Membuat symlink bind9 ke named..."
-             ln -s /etc/init.d/named /etc/init.d/bind9
-             echo -e "${GREEN}BERHASIL!${NC}"
-        fi
-
-        # Langkah 3: Mendaftarkan zona slave di named.conf.local
-        echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf.local${NC}"
+        # Langkah 2: Mendaftarkan zona slave di named.conf.local
+        echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.local${NC}"
         echo -n "  -> Mendaftarkan zona slave $DOMAIN..."
         cat <<EOF > /etc/bind/named.conf.local
 // Konfigurasi Zona Slave $DOMAIN
@@ -269,12 +267,15 @@ zone "$DOMAIN" {
 EOF
         echo -e "${GREEN}BERHASIL! (Master IP: $MASTER_IP)${NC}"
 
-        # Langkah 4: Restart Service
-        echo -e "\n${YELLOW}* Langkah 4: Restart Service${NC}"
+        # Langkah 3: Restart Service
+        echo -e "\n${YELLOW}* Langkah 3: Restart Service${NC}"
         restart_bind9
         
-        echo -e "\n${YELLOW}💡 INFO: Periksa log untuk transfer zona!${NC}"
-        echo -e "   ${BLUE}journalctl -u bind9 -f${NC}"
+        # Langkah 4: Verifikasi
+        echo -e "\n${YELLOW}* Langkah 4: Verifikasi Zone Transfer${NC}"
+        echo -e "💡 INFO: Periksa file zona di /var/cache/bind/ untuk membuktikan transfer berhasil!${NC}"
+        echo -e "   ${BLUE}ls -l /var/cache/bind/$DOMAIN.zone${NC}"
+        echo -e "   ${BLUE}grep 'Transfer completed' /var/log/syslog${NC} (Jika syslogd berjalan)"
 
         echo -e "\n${GREEN}====================================================${NC}"
         echo -e "${GREEN}✅ Setup Slave DNS Server (Valmar) SELESAI.${NC}"
@@ -302,28 +303,27 @@ EOF
         echo -e "  2. Valmar (Slave): ${GREEN}$SLAVE_IP${NC}"
         echo -e "  3. Fallback: ${GREEN}$FORWARDER_IP${NC}"
 
-        # Langkah 2: Setup Persisten untuk /root/.bashrc (Opsional, tapi ini salah)
-        # LOGIKA ASLI DIBAWAH INI TIDAK BENAR. resolv.conf TIDAK PERLU DITIMPA SETIAP LOGIN.
-        # Saya asumsikan Anda ingin MENGINSTALL `dnsutils` untuk testing.
-        
+        # Langkah 2: Instalasi DNS Utility
         echo -e "\n${YELLOW}* Langkah 2: Instalasi DNS Utility${NC}"
-        echo -n "  -> Menginstall dnsutils (dig, nslookup)..."
+        echo -n "  -> Menginstall dnsutils dan telnet..."
         apt-get update > /dev/null 2>&1
-        apt-get install -y dnsutils > /dev/null 2>&1
+        apt-get install -y dnsutils telnet > /dev/null 2>&1
         if [ $? -eq 0 ]; then
              echo -e "${GREEN}BERHASIL!${NC}"
         else
-             echo -e "${YELLOW}WARNING: dnsutils gagal diinstall. Lanjut...${NC}"
+             echo -e "${YELLOW}WARNING: Utility gagal diinstall. Lanjut...${NC}"
         fi
         
-        # Menghapus perbaikan yang SALAH di resolv.conf dari .bashrc
+        # Membersihkan file .bashrc dari entri resolv.conf yang tidak perlu
+        echo -e "\n${YELLOW}* Pembersihan konfigurasi .bashrc lama...${NC}"
         sed -i '/nameserver 192\.213\.3\.3/d' /root/.bashrc
         sed -i '/nameserver 192\.213\.3\.4/d' /root/.bashrc
         sed -i '/nameserver 192\.168\.122\.1/d' /root/.bashrc
+        echo -e "${GREEN}BERHASIL!${NC}"
 
         echo -e "\n${GREEN}====================================================${NC}"
         echo -e "${GREEN}✅ Setup Client Host SELESAI.${NC}"
-        echo -e "${GREEN}Anda dapat menguji dengan 'dig $DOMAIN'${NC}"
+        echo -e "${GREEN}Anda dapat menguji dengan 'dig $DOMAIN @$MASTER_IP'${NC}"
         echo -e "${GREEN}====================================================${NC}"
         ;;
 esac
