@@ -358,3 +358,427 @@ ls -l /var/cache/bind/k16.com.zone
 dig k16.com @127.0.0.1
 ```
 <img width="1267" height="857" alt="Screenshot 2025-10-22 212423" src="https://github.com/user-attachments/assets/b08e6ec2-6bb2-4520-992d-70b1fcc87911" />
+
+
+## Question 5
+
+> “Nama memberi arah,” kata Eonwe. Namai semua tokoh (hostname) sesuai glosarium, eonwe, earendil, elwing, cirdan, elrond, maglor, sirion, tirion, valmar, lindon, vingilot, dan verifikasi bahwa setiap host mengenali dan menggunakan hostname tersebut secara system-wide. Buat setiap domain untuk masing masing node sesuai dengan namanya (contoh: eru.<xxxx>.com) dan assign IP masing-masing juga. Lakukan pengecualian untuk node yang bertanggung jawab atas ns1 dan ns2
+
+
+Gunakan Bash dibawah ini
+```bash
+#!/bin/bash
+
+# =================================================================
+# Script untuk Menambahkan A Records ke Zona k16.com (FINAL & INTERAKTIF)
+# Dijalankan di: TIRION (DNS Master)
+# =================================================================
+
+# --- Variabel Warna ANSI ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# --- Variabel Konfigurasi ---
+ZONE_FILE="/etc/bind/k16/k16.com"
+
+# --- Fungsi Utility ---
+
+# Pengecekan hak akses root
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}❌ GAGAL: Script ini harus dijalankan sebagai root (atau menggunakan sudo).${NC}"
+        exit 1
+    fi
+}
+
+# Fungsi restart bind9 (menggunakan logika robust)
+restart_bind9() {
+    echo -n "  -> Me-restart service BIND9..."
+    # Mencoba systemctl, service, lalu init.d
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart bind9
+    elif command -v service >/dev/null 2>&1; then
+        service bind9 restart
+    elif [ -x /etc/init.d/bind9 ]; then
+        /etc/init.d/bind9 restart
+    else
+        echo -e "\n${RED}❌ GAGAL: Tidak dapat me-restart bind9. Harap restart manual.${NC}"
+        return 1
+    fi
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}BERHASIL!${NC}"
+    else
+        echo -e "${RED}GAGAL!${NC}"
+        return 1
+    fi
+}
+
+# --- Main Program ---
+check_root
+
+# Tampilan menu utama
+echo -e "${BLUE}====================================================${NC}"
+echo -e "${PURPLE}       💾 Script Penambah A Record DNS Master${NC}"
+echo -e "${BLUE}====================================================${NC}"
+echo -e "Hostname baru akan ditambahkan ke zona ${YELLOW}k16.com${NC}."
+echo -e "File Zona: ${BLUE}$ZONE_FILE${NC}"
+echo -e "IP yang digunakan: ${GREEN}192.213.x.x${NC}"
+echo -e "----------------------------------------------------"
+
+read -p "Tekan [Y/y] untuk MENAMBAH RECORD atau [N/n] untuk batal: " confirm
+
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo -e "${YELLOW}Operasi dibatalkan oleh pengguna.${NC}"
+    exit 0
+fi
+
+# --- Proses Penambahan Record ---
+
+# 1. Cek apakah file zona ada
+echo -e "\n${YELLOW}* Langkah 1: Pengecekan File Zona${NC}"
+if [ ! -f "$ZONE_FILE" ]; then
+    echo -e "${RED}❌ GAGAL: File zona $ZONE_FILE tidak ditemukan.${NC}"
+    echo -e "Pastikan Anda menjalankan script ini di Tirion (Master) setelah setup awal."
+    exit 1
+fi
+echo -e "${GREEN}BERHASIL: File zona ditemukan.${NC}"
+
+
+# 2. Tambahkan A records baru
+echo -e "\n${YELLOW}* Langkah 2: Menambahkan Record Baru${NC}"
+echo -e "  -> Menulis A records ke akhir file... (Menggunakan 192.213.x.x)"
+cat <<EOF >> "$ZONE_FILE"
+
+; Penambahan host baru (Sesuai Glosarium: eonwe, earendil, elwing, cirdan, elrond, maglor, lindon, vingilot)
+eonwe    IN      A       192.213.1.2
+earendil IN      A       192.213.1.3
+elwing   IN      A       192.213.2.2
+cirdan   IN      A       192.213.2.3
+elrond   IN      A       192.213.2.4
+maglor   IN      A       192.213.3.5
+lindon   IN      A       192.213.3.6
+vingilot IN      A       192.213.3.7
+EOF
+echo -e "${GREEN}BERHASIL: 8 Hostname baru berhasil ditambahkan.${NC}"
+
+
+# 3. Naikkan nomor serial secara otomatis (LOGIKA DIPERKUAT: ANTI-WHITESPACE)
+echo -e "\n${YELLOW}* Langkah 3: Menaikkan Nomor Serial${NC}"
+
+# Mencari baris yang berisi 'Serial' dan mengekstrak angka 10 digit pertama
+CURRENT_SERIAL=$(grep -i 'Serial' "$ZONE_FILE" | grep -oE '[0-9]{10,}' | head -1)
+
+if [[ ! "$CURRENT_SERIAL" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}❌ GAGAL: Tidak dapat membaca Nomor Serial. Pastikan format di file zona benar.${NC}"
+    exit 1
+fi
+
+NEW_SERIAL=$((CURRENT_SERIAL + 1))
+
+# Mengganti angka serial lama dengan yang baru di file zona
+sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
+
+echo -e "${GREEN}BERHASIL! Serial diperbarui dari $CURRENT_SERIAL menjadi $NEW_SERIAL.${NC}"
+
+
+# 4. Restart layanan BIND9 dan Verifikasi
+echo -e "\n${YELLOW}* Langkah 4: Restart Service & Verifikasi${NC}"
+
+# 4a. Verifikasi Sintaks sebelum Restart
+echo -n "  -> Memeriksa sintaks file zona..."
+named-checkzone k16.com "$ZONE_FILE" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo -e "${RED}GAGAL! named-checkzone GAGAL. Harap periksa sintaks file $ZONE_FILE.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Sintaks OK!${NC}"
+
+
+# 4b. Restart
+restart_bind9
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Proses dihentikan karena GAGAL me-restart BIND9.${NC}"
+    exit 1
+fi
+
+
+# --- Selesai ---
+echo -e "\n${GREEN}====================================================${NC}"
+echo -e "${GREEN}✅ Script Selesai Dijalankan (Tirion Updated).${NC}"
+echo -e "${YELLOW}BIND9 akan mengirim notifikasi Zone Transfer. ${BLUE}Langkah selanjutnya adalah VERIFIKASI di Valmar dan Client!${NC}"
+echo -e "${GREEN}====================================================${NC}"
+exit 0
+```
+<img width="1736" height="954" alt="image" src="https://github.com/user-attachments/assets/87c82354-b034-4ec5-bb34-4c886b10e983" />
+Untuk memastikan bahwa sudah ditambahkan bisa menggunakan
+```bash
+ls -l /var/cache/bind/k16.com.zone
+```
+jika berhasil maka ukuran file akan berubah
+
+
+## Question 6
+
+> Lonceng Valmar berdentang mengikuti irama Tirion. Pastikan zone transfer berjalan, Pastikan Valmar (ns2) telah menerima salinan zona terbaru dari Tirion (ns1). Nilai serial SOA di keduanya harus sama
+
+Gunakan script bash di bawah ini
+```bash
+#!/bin/bash
+
+# =================================================================
+# Script Verifikasi KONSISTENSI Serial SOA (Interaktif)
+# Digunakan untuk mengecek apakah Zone Transfer berhasil.
+# IP KOREKSI: Tirion=192.213.3.3, Valmar=192.213.3.4
+# =================================================================
+
+# --- Variabel Warna ANSI ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# --- Variabel Konfigurasi ---
+MASTER_IP="192.213.3.3"  # Tirion
+SLAVE_IP="192.213.3.4"   # Valmar
+DOMAIN="k16.com"
+
+# --- Pengecekan Hak Akses Root ---
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}❌ GAGAL: Script ini harus dijalankan sebagai root atau dengan sudo.${NC}"
+    exit 1
+fi
+
+# --- Fungsi Utility ---
+cleanup() {
+    rm -f /tmp/serial_valmar.txt /tmp/serial_tirion.txt
+}
+
+# --- Main Program ---
+cleanup # Bersihkan file lama jika ada
+
+# Tampilan menu utama
+echo -e "${BLUE}====================================================${NC}"
+echo -e "${PURPLE}       🔍 Script Verifikasi Konsistensi Serial SOA${NC}"
+echo -e "${BLUE}====================================================${NC}"
+echo -e "Script ini akan membandingkan Nomor Serial SOA:"
+echo -e "  - ${YELLOW}Master (Tirion): ${MASTER_IP}${NC}"
+echo -e "  - ${YELLOW}Slave (Valmar): ${SLAVE_IP}${NC}"
+echo -e "----------------------------------------------------"
+
+read -p "Tekan [Y/y] untuk MEMULAI PENGECKAN: " confirm
+
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo -e "${YELLOW}Operasi dibatalkan oleh pengguna.${NC}"
+    cleanup
+    exit 0
+fi
+
+# --- Proses Cek Serial ---
+echo -e "\n${YELLOW}* Langkah 1: Mengambil Serial dari Tirion (Master)${NC}"
+
+# Mengambil serial dari Tirion menggunakan IP 192.213.3.3
+dig "@$MASTER_IP" "$DOMAIN" SOA +short 2>/dev/null | awk '{print $3}' > /tmp/serial_tirion.txt
+
+# Pengecekan status kueri
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ GAGAL: Kueri ke Tirion gagal. Cek koneksi atau layanan BIND9 di Master.${NC}"
+    cleanup
+    exit 1
+fi
+
+echo -e "${YELLOW}* Langkah 2: Mengambil Serial dari Valmar (Slave)${NC}"
+
+# Mengambil serial dari Valmar menggunakan IP 192.213.3.4
+dig "@$SLAVE_IP" "$DOMAIN" SOA +short 2>/dev/null | awk '{print $3}' > /tmp/serial_valmar.txt
+
+# Pengecekan status kueri
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ GAGAL: Kueri ke Valmar gagal. Cek koneksi atau layanan BIND9 di Slave.${NC}"
+    cleanup
+    exit 1
+fi
+
+
+# --- Analisis dan Hasil ---
+echo -e "\n${YELLOW}* Langkah 3: Analisis Hasil${NC}"
+
+serial_tirion=$(cat /tmp/serial_tirion.txt)
+serial_valmar=$(cat /tmp/serial_valmar.txt)
+
+echo -e "  Serial Master (Tirion) : ${BLUE}$serial_tirion${NC}"
+echo -e "  Serial Slave (Valmar)  : ${BLUE}$serial_valmar${NC}"
+
+if [ -z "$serial_tirion" ] || [ -z "$serial_valmar" ]; then
+    echo -e "${RED}❌ GAGAL: Tidak dapat mengambil Nomor Serial (Kemungkinan SERVFAIL).${NC}"
+elif [ "$serial_valmar" == "$serial_tirion" ]; then
+    echo -e "\n${GREEN}✅ SUKSES! Serial SOA di Tirion dan Valmar SAMA.${NC}"
+    echo -e "${GREEN}Ini mengonfirmasi Zone Transfer telah berhasil!${NC}"
+else
+    echo -e "\n${RED}⚠️ PERINGATAN! Serial SOA di Tirion dan Valmar BERBEDA.${NC}"
+    echo -e "  - Ini menandakan Zone Transfer BELUM berhasil atau tertunda."
+    echo -e "  - Coba ${YELLOW}rndc retransfer k16.com${NC} di Valmar untuk memaksa transfer."
+fi
+
+# --- Selesai ---
+cleanup
+echo -e "\n${BLUE}====================================================${NC}"
+echo -e "Pengecekan Serial Selesai."
+echo -e "${BLUE}====================================================${NC}"
+exit 0
+```
+Hasilnya :
+<img width="1036" height="665" alt="Screenshot 2025-10-22 221803" src="https://github.com/user-attachments/assets/06b893de-c745-44fc-a125-dae9db5c6b79" />
+
+
+## Question 7
+
+> Peta kota dan pelabuhan dilukis. Sirion sebagai gerbang, Lindon sebagai web statis, Vingilot sebagai web dinamis. Tambahkan pada zona <xxxx>.com A record untuk sirion.<xxxx>.com (IP Sirion), lindon.<xxxx>.com (IP Lindon), dan vingilot.<xxxx>.com (IP Vingilot). Tetapkan CNAME :
+ - www.<xxxx>.com → sirion.<xxxx>.com, 
+ - static.<xxxx>.com → lindon.<xxxx>.com, dan 
+ - app.<xxxx>.com → vingilot.<xxxx>.com.
+Verifikasi dari dua klien berbeda bahwa seluruh hostname tersebut ter-resolve ke tujuan yang benar dan konsisten.
+
+Gunakan script bash di bawah ini:
+```bash
+#!/bin/bash
+
+# =================================================================
+# Script FINAL Perbaikan CNAME: FOKUS pada SERIAL & RESTART
+# Dijalankan di: TIRION (DNS Master)
+# CATATAN: Konflik CNAME (GANDA) harus diperbaiki MANUAL di file zona.
+# =================================================================
+
+# --- Variabel Warna ANSI ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# --- Variabel Konfigurasi ---
+ZONE_FILE="/etc/bind/k16/k16.com"
+
+# --- Fungsi Utility ---
+
+# Pengecekan hak akses root
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo -e "${RED}❌ GAGAL: Script ini harus dijalankan sebagai root (atau menggunakan sudo).${NC}"
+        exit 1
+    fi
+}
+
+# Fungsi restart bind9 (menggunakan logika robust)
+restart_bind9() {
+    echo -n "  -> Me-restart service BIND9..."
+    # Mencoba systemctl, service, lalu init.d
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart bind9
+    elif command -v service >/dev/null 2>&1; then
+        service bind9 restart
+    elif [ -x /etc/init.d/bind9 ]; then
+        /etc/init.d/bind9 restart
+    else
+        echo -e "\n${RED}❌ GAGAL: Tidak dapat me-restart bind9. Harap restart manual.${NC}"
+        return 1
+    fi
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}BERHASIL!${NC}"
+    else
+        echo -e "${RED}GAGAL!${NC}"
+        return 1
+    fi
+}
+
+# --- Main Program ---
+check_root
+
+# Tampilan menu utama
+echo -e "${BLUE}====================================================${NC}"
+echo -e "${PURPLE}       🔧 Script Perbaikan CNAME dan Peningkatan Serial${NC}"
+echo -e "${BLUE}====================================================${NC}"
+echo -e "Script ini akan menaikkan Serial Number dan me-restart BIND9."
+echo -e "${RED}PASTIKAN Anda SUDAH memperbaiki konflik CNAME di file zona secara manual!${NC}"
+echo -e "File Zona: ${BLUE}$ZONE_FILE${NC}"
+echo -e "----------------------------------------------------"
+
+read -p "Tekan [Y/y] untuk MELANJUTKAN: " confirm
+
+if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo -e "${YELLOW}Operasi dibatalkan oleh pengguna.${NC}"
+    exit 0
+fi
+
+# --- Proses Perbaikan & Restart ---
+
+# 1. Cek apakah file zona ada
+echo -e "\n${YELLOW}* Langkah 1: Pengecekan File Zona${NC}"
+if [ ! -f "$ZONE_FILE" ]; then
+    echo -e "${RED}❌ GAGAL: File zona $ZONE_FILE tidak ditemukan.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}BERHASIL: File zona ditemukan.${NC}"
+
+
+# 2. Naikkan nomor serial secara otomatis (LOGIKA DIPERKUAT)
+echo -e "\n${YELLOW}* Langkah 2: Menaikkan Nomor Serial${NC}"
+
+# Mencari baris yang berisi 'Serial' dan mengekstrak angka 10 digit pertama
+CURRENT_SERIAL=$(grep -i 'Serial' "$ZONE_FILE" | grep -oE '[0-9]{10,}' | head -1)
+
+if [[ ! "$CURRENT_SERIAL" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}❌ GAGAL: Tidak dapat membaca Nomor Serial. Harap periksa format di file zona.${NC}"
+    exit 1
+fi
+
+NEW_SERIAL=$((CURRENT_SERIAL + 1))
+
+# Mengganti angka serial lama dengan yang baru di file zona
+sed -i "s/$CURRENT_SERIAL/$NEW_SERIAL/" "$ZONE_FILE"
+
+echo -e "${GREEN}BERHASIL! Serial diperbarui dari $CURRENT_SERIAL menjadi $NEW_SERIAL.${NC}"
+
+
+# 3. Restart layanan BIND9 dan Verifikasi
+echo -e "\n${YELLOW}* Langkah 3: Restart Service & Verifikasi${NC}"
+
+# 3a. Verifikasi Sintaks sebelum Restart
+echo -n "  -> Memeriksa sintaks file zona..."
+named-checkzone k16.com "$ZONE_FILE" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo -e "${RED}GAGAL! named-checkzone GAGAL. Perbaiki konflik CNAME di file zona dan jalankan lagi.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Sintaks OK!${NC}"
+
+
+# 3b. Restart
+restart_bind9
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Proses dihentikan karena GAGAL me-restart BIND9.${NC}"
+    exit 1
+fi
+
+
+# --- Selesai ---
+echo -e "\n${GREEN}====================================================${NC}"
+echo -e "${GREEN}✅ Script Selesai Dijalankan (Tirion Diperbarui).${NC}"
+echo -e "${YELLOW}Zone Transfer akan terpicu ke Valmar.${NC}"
+echo -e "${BLUE}Langkah Selanjutnya: Uji CNAME (www.k16.com) di Slave!${NC}"
+echo -e "${GREEN}====================================================${NC}"
+exit 0
+```
+<img width="1600" height="855" alt="image" src="https://github.com/user-attachments/assets/4685857e-fce5-4f3e-a6f7-91b91ae707d0" />
+
+
+## Question 8
+
+> Setiap jejak harus bisa diikuti. Di Tirion (ns1) deklarasikan satu reverse zone untuk segmen DMZ tempat Sirion, Lindon, Vingilot berada. Di Valmar (ns2) tarik reverse zone tersebut sebagai slave, isi PTR untuk ketiga hostname itu agar pencarian balik IP address mengembalikan hostname yang benar, lalu pastikan query reverse untuk alamat Sirion, Lindon, Vingilot dijawab authoritative.
+
