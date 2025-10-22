@@ -69,7 +69,7 @@ Gunakan script bash dan coba gunakan tampilan yang interakttif agar lebih mudah
 # =================================================================
 # Script Otomatisasi Setup DNS Master, Slave, dan Client (FINAL PRODUCTION READY)
 # DOMAIN: k16.com
-# FIX: Mengatasi masalah Non-Systemd, service restart, named.conf, dan syntax error.
+# FIX: Mengatasi SERVFAIL (masalah kepemilikan/izin zona) dan menguji ulang named-checkzone.
 # =================================================================
 
 # --- Variabel Warna ANSI ---
@@ -107,7 +107,6 @@ restart_bind9() {
     sleep 1 
 
     # 2. Coba jalankan named secara manual (fallback untuk non-systemd/non-init.d)
-    # Menggunakan named.conf sebagai entry point utama
     /usr/sbin/named -c /etc/bind/named.conf & 2>/dev/null
     sleep 2 
     status=$? 
@@ -135,7 +134,6 @@ restart_bind9() {
 install_bind9() {
     echo -n "  -> Mengupdate list paket dan menginstall BIND9 & dnsutils..."
     apt-get update > /dev/null 2>&1
-    # Memastikan net-tools terinstal untuk netstat
     apt-get install -y bind9 dnsutils net-tools telnet > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}BERHASIL!${NC}"
@@ -184,13 +182,22 @@ options {
 };
 EOF
         echo -e "${GREEN}BERHASIL!${NC}"
+        
+        # FIX A: Membuat named.conf.default-zones kosong
+        echo -n "  -> Membuat named.conf.default-zones kosong..."
+        touch /etc/bind/named.conf.default-zones
+        chmod 644 /etc/bind/named.conf.default-zones
+        echo -e "${GREEN}BERHASIL!${NC}"
+
 
         # Langkah 3: Konfigurasi named.conf (File Utama)
-        echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf (File Utama) [FIXED]${NC}"
-        echo -n "  -> Membuat entry point named.conf tanpa default-zones..."
+        echo -e "\n${YELLOW}* Langkah 3: Konfigurasi named.conf (File Utama) [FINAL]${NC}"
+        echo -n "  -> Membuat entry point named.conf..."
+        # FIX B: Mengembalikan include default-zones karena file sudah dibuat
         cat <<EOF > /etc/bind/named.conf
 include "/etc/bind/named.conf.options";
 include "/etc/bind/named.conf.local";
+include "/etc/bind/named.conf.default-zones";
 EOF
         echo -e "${GREEN}BERHASIL!${NC}"
         
@@ -215,7 +222,7 @@ EOF
         cat <<EOF > $ZONE_DIR/$DOMAIN.zone
 \$TTL    604800
 @       IN      SOA     ns1.$DOMAIN. root.$DOMAIN. (
-                        2025102310 ; Serial (Dinaikkan)
+                        2025102311 ; Serial (Dinaikkan untuk reload)
                         604800     ; Refresh
                         86400      ; Retry
                         2419200    ; Expire
@@ -231,9 +238,10 @@ ns1     IN      A       $MASTER_IP
 ns2     IN      A       $SLAVE_IP 
 www     IN      A       $WEB_IP
 EOF
+        # FIX C: Memastikan Kepemilikan dan Izin Benar untuk BIND
         chown root:bind $ZONE_DIR/$DOMAIN.zone
         chmod 644 $ZONE_DIR/$DOMAIN.zone
-        echo -e "${GREEN}FILE ZONA BERHASIL!${NC}"
+        echo -e "${GREEN}FILE ZONA & IZIN BERHASIL!${NC}"
 
         # Langkah 6: Verifikasi Konfigurasi
         echo -e "\n${YELLOW}* Langkah 6: Verifikasi Konfigurasi${NC}"
@@ -250,8 +258,8 @@ EOF
         restart_bind9 
         
         echo -e "\n${GREEN}====================================================${NC}"
-        # FIX KRITIS: echo-e di baris ini sudah diperbaiki
         echo -e "${GREEN}✅ Setup Master DNS Server (Tirion) SELESAI.${NC}" 
+        echo -e "${GREEN}   VERIFIKASI: dig @127.0.0.1 k16.com SOA${NC}" 
         echo -e "${GREEN}====================================================${NC}"
         ;;
 
@@ -261,13 +269,16 @@ EOF
         install_bind9
         
         # Langkah 2: Konfigurasi named.conf.local
-        echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.local [FIXED]${NC}"
+        echo -e "\n${YELLOW}* Langkah 2: Konfigurasi named.conf.local${NC}"
         echo -n "  -> Mendaftarkan zona slave $DOMAIN..."
         
-        # named.conf di Slave (tanpa default-zones)
+        # named.conf di Slave (Membuat default-zones kosong dan meng-include)
+        touch /etc/bind/named.conf.default-zones
+        chmod 644 /etc/bind/named.conf.default-zones
         cat <<EOF > /etc/bind/named.conf
 include "/etc/bind/named.conf.options";
 include "/etc/bind/named.conf.local";
+include "/etc/bind/named.conf.default-zones";
 EOF
 
         cat <<EOF > /etc/bind/named.conf.options
